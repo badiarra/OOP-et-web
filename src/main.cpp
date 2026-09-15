@@ -1,82 +1,160 @@
 #include <Arduino.h>
+#include <ArduinoJson.h>
+#include <LittleFS.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include "led/Led.h"
 
-const int LED_1 = 40;
-const int LED_2 = 41;
+//Les broches des deux Dels
+const int LED1_PIN = 41;
+const int LED2_PIN = 42;
 
-void toggleLed(int led, int delayTime)
-{
-  digitalWrite(led, !digitalRead(led));
-  delay(delayTime);
+//Creation des objets Led
+Led led1(LED1_PIN);
+Led led2(LED2_PIN);
 
-  digitalWrite(led, !digitalRead(led));
-  delay(delayTime);
-}
+//Configuration du réseau Wi-Fi
+const char* ssid = "TGE-IOT";
+const char* password = "iOTN3t$$";
 
-void vTaskLed1(void *pvParameters)
-{
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  //int led = *(int *)pvParameters;
-  while (1)
-  {
-    digitalWrite(LED_1, !digitalRead(LED_1));
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
+WebServer server(80);
 
-    digitalWrite(LED_1, !digitalRead(LED_1));
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(500));
+
+//Lecture du fichier html
+
+void handleRoot() {
+  File file = LittleFS.open("/index.html", "r");
+  if (!file) {
+    server.send(500, "text/plain", "Failed to open index.html");
+    return;
   }
+  server.streamFile(file, "text/html");
+  file.close();
 }
 
-void vTaskLed2(void *pvParameters)
-{
-  TickType_t xLastWakeTime = xTaskGetTickCount();
-  //int led = *(int *)pvParameters;
-  while (1)
-  {
-    digitalWrite(LED_2, !digitalRead(LED_2));
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
-
-    digitalWrite(LED_2, !digitalRead(LED_2));
-    vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(1000));
+//Lecture du fichier CSS
+void handleCSS() {
+  File file = LittleFS.open("/style.css", "r");
+  if (!file) {
+    server.send(500, "text/plain", "Failed to open style.css");
+    return;
   }
+  server.streamFile(file, "text/css");
+  file.close();
 }
 
-void vTaskChargeCPU(void *pvParameters){
-  while (1)
-    {
-        for (volatile int i = 0; i < 200000; i++);
-    }
+//Lecture du fichier JS
+void handleJS() {
+  File file = LittleFS.open("/script.js", "r");
+  if (!file) {
+    server.send(500, "text/plain", "Failed to open script.js");
+    return;
+  }
+  server.streamFile(file, "application/javascript");
+  file.close();
 }
 
-void setup()
-{
-  // Configurer les broches des LED comme sorties
-  pinMode(LED_1, OUTPUT);
-  pinMode(LED_2, OUTPUT);
+//Etat des dels
 
-  digitalWrite(LED_1, LOW);
-  digitalWrite(LED_2, LOW);
-/*
-  xTaskCreate(vTaskLed1, "LED1", 1000, NULL, 2, NULL);
-  xTaskCreate(vTaskLed2, "LED2", 1000, NULL, 1, NULL);
-  xTaskCreate(vTaskChargeCPU, "CPU", 1000, NULL, 0, NULL);
-  */
+void handleLedState(){
+  //
+  JsonDocument doc;
+
+  doc["led1"]=led1.getState()?"ON":"OFF";
+  doc["led2"]=led2.getState()?"ON":"OFF";
+  String response;
+  serializeJson(responseDoc, response);
+  server.send(200, "application/json", response);
 }
 
-void loop()
-{
-/*
-  // Boucle pour charger le CPU
-  // for (volatile int i = 0; i < 200000; i++);
+//Gestion des requêtes pour allumer/éteindre les Dels
+void handleLedControl() {
+  if (!server.hasArg("plain")) {
+    server.send(400, "application/json", "{\"error\":\"No JSON data received\"}");
+    return;
+  }
 
-  // Clignoter LED_1
-  toggleLed(LED_1, 500); // Attendre 0.5 seconde
+  String jsonData = server.arg("plain");
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, jsonData);
 
-  // Boucle pour charger le CPU
-  // for (volatile int i = 0; i < 200000; i++);
+  if (error) {
+    server.send(400, "application/json", "{\"error\":\"Failed to parse JSON\"}");
+    return;
+  }
 
-  // Clignoter LED_2
-  toggleLed(LED_2, 1000); // Attendre 1 seconde
+
+  if (!doc["led1"].isNull()) {   // if (doc["led1"].is<JsonVariant>()) {  // if (doc.containsKey("led1")) {
+    led1.toggle();
+  } 
+
+  if (!doc["led2"].isNull()) {    //if (doc.containsKey("led2")) {
+    led2.toggle();
+  }
+
+  // Réponse JSON
+  JsonDocument responseDoc;
+  responseDoc["led1"] = led1.getState() ? "ON" : "OFF";
+  responseDoc["led2"] = led2.getState() ? "ON" : "OFF";
+
+  String responseData;
+  serializeJson(responseDoc, responseData);
+  server.send(200, "application/json", responseData);
+}
+
+void setup() {
+
+  Serial.begin(115200);
+
+  delay(3000); // Attendre que le port série soit prêt
+
+
+  //Initialisation des Dels
+  led1.init();
+  led2.init();
+
+  if (!LittleFS.begin(true))
+  {
+    Serial.println("Erreur lors du montage de LittleFS !");
+    return;
+  }
+
+  Serial.println("LittleFS monté avec succès.");
+
   
-  */
+  // ===============================
+  // Connexion au WiFi
+  // ===============================
+  Serial.print("Connexion au WiFi : ");
+  Serial.println(ssid);
 
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi connecté !");
+  Serial.print("Adresse IP : ");
+  Serial.println(WiFi.localIP());
+ 
+//Les routes 
+  server.on("/", handleRoot);
+  server.on("/style.css", handleCSS);
+  server.on("/script.js", handleJS);
+
+  server.on("/led-control", HTTP_POST, handleLedControl);
+  server.on("/led-state", handleLedState)
+
+  server.begin();
 }
+
+void loop() {
+  // put your main code here, to run repeatedly:
+  server.handleClient();
+}
+
+
